@@ -35,6 +35,17 @@ public class ShowcaseDemo extends JPanel implements Runnable {
     private double cameraHeight = 15;
     private double cameraDistance = 25;
     
+    private boolean isPaused = false;
+    private boolean mouseDragging = false;
+    private int lastMouseX, lastMouseY;
+    private double manualCameraAngle = 0;
+    private double manualCameraHeight = 15;
+    
+    private int culledObjects = 0;
+    
+    private List<TrailPoint> trails = new ArrayList<>();
+    private static final int MAX_TRAIL_POINTS = 200;
+    
     // Scene modes
     private enum SceneMode {
         SOLAR_SYSTEM,
@@ -61,6 +72,7 @@ public class ShowcaseDemo extends JPanel implements Runnable {
         // Initialize scene
         bodies = new ArrayList<>();
         particles = new ArrayList<>();
+        trails = new ArrayList<>();
         createSolarSystem();
         
         // Setup controls
@@ -288,7 +300,15 @@ public class ShowcaseDemo extends JPanel implements Runnable {
                         cameraDistance -= 2;
                         break;
                     case KeyEvent.VK_SPACE:
+                        isPaused = !isPaused;
+                        break;
+                    case KeyEvent.VK_R:
                         time = 0;
+                        trails.clear();
+                        break;
+                    case KeyEvent.VK_T:
+                        trailEffect = !trailEffect;
+                        if (!trailEffect) trails.clear();
                         break;
                     case KeyEvent.VK_ESCAPE:
                         System.exit(0);
@@ -297,13 +317,57 @@ public class ShowcaseDemo extends JPanel implements Runnable {
             }
         });
         
-        // Mouse controls
+        // Mouse controls - drag to rotate camera
+        addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                mouseDragging = true;
+                lastMouseX = e.getX();
+                lastMouseY = e.getY();
+            }
+            
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                mouseDragging = false;
+            }
+            
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getButton() == MouseEvent.BUTTON1) {
+                    isPaused = !isPaused;
+                }
+            }
+        });
+        
         addMouseMotionListener(new MouseMotionAdapter() {
             @Override
-            public void mouseMoved(MouseEvent e) {
-                double centerX = getWidth() / 2.0;
-                cameraAngle = (e.getX() - centerX) / centerX * Math.PI / 4;
+            public void mouseDragged(MouseEvent e) {
+                if (mouseDragging) {
+                    int dx = e.getX() - lastMouseX;
+                    int dy = e.getY() - lastMouseY;
+                    
+                    manualCameraAngle += dx * 0.01;
+                    manualCameraHeight -= dy * 0.1;
+                    manualCameraHeight = Math.max(-50, Math.min(50, manualCameraHeight));
+                    
+                    lastMouseX = e.getX();
+                    lastMouseY = e.getY();
+                }
             }
+            
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                if (!mouseDragging) {
+                    double centerX = getWidth() / 2.0;
+                    cameraAngle = (e.getX() - centerX) / centerX * Math.PI / 4;
+                }
+            }
+        });
+        
+        // Mouse wheel for zoom
+        addMouseWheelListener(e -> {
+            cameraDistance += e.getWheelRotation() * 2;
+            cameraDistance = Math.max(5, Math.min(100, cameraDistance));
         });
     }
     
@@ -353,35 +417,45 @@ public class ShowcaseDemo extends JPanel implements Runnable {
     }
     
     private void update(double deltaTime) {
-        time += deltaTime;
+        if (!isPaused) {
+            time += deltaTime;
+        }
         
         // Smooth camera movement
-        cameraAngle += deltaTime * 0.1;
-        double smoothHeight = cameraHeight + Math.sin(time * 0.5) * 2;
+        double targetAngle = mouseDragging ? manualCameraAngle : cameraAngle + time * 0.1;
+        double targetHeight = mouseDragging ? manualCameraHeight : cameraHeight + Math.sin(time * 0.5) * 2;
+        
         camera.position = new Vector3D(
-            Math.cos(cameraAngle) * cameraDistance,
-            smoothHeight,
-            Math.sin(cameraAngle) * cameraDistance
+            Math.cos(targetAngle) * cameraDistance,
+            targetHeight,
+            Math.sin(targetAngle) * cameraDistance
         );
         camera.target = new Vector3D(0, 0, 0);
         
         // Update scene based on mode
-        switch (currentMode) {
-            case SOLAR_SYSTEM:
-                updateSolarSystem();
-                break;
-            case PARTICLE_VORTEX:
-                updateParticles();
-                break;
-            case GEOMETRIC_WAVE:
-                updateGeometricWave();
-                break;
-            case SPINNING_GALAXY:
-                updateSpinningGalaxy();
-                break;
-            case CUBE_MATRIX:
-                updateCubeMatrix();
-                break;
+        if (!isPaused) {
+            switch (currentMode) {
+                case SOLAR_SYSTEM:
+                    updateSolarSystem();
+                    break;
+                case PARTICLE_VORTEX:
+                    updateParticles();
+                    break;
+                case GEOMETRIC_WAVE:
+                    updateGeometricWave();
+                    break;
+                case SPINNING_GALAXY:
+                    updateSpinningGalaxy();
+                    break;
+                case CUBE_MATRIX:
+                    updateCubeMatrix();
+                    break;
+            }
+            
+            // Update trails
+            if (trailEffect) {
+                updateTrails();
+            }
         }
     }
     
@@ -450,6 +524,53 @@ public class ShowcaseDemo extends JPanel implements Runnable {
         }
     }
     
+    private void updateTrails() {
+        // Add trail points from moving objects
+        if (currentMode == SceneMode.SOLAR_SYSTEM || currentMode == SceneMode.SPINNING_GALAXY) {
+            for (int i = 1; i < Math.min(bodies.size(), 4); i++) {
+                CelestialBody body = bodies.get(i);
+                trails.add(new TrailPoint(
+                    new Vector3D(body.mesh.position.x, body.mesh.position.y, body.mesh.position.z),
+                    body.color,
+                    1.0f
+                ));
+            }
+        } else if (currentMode == SceneMode.PARTICLE_VORTEX) {
+            for (int i = 0; i < Math.min(particles.size(), 10); i += 2) {
+                Particle p = particles.get(i);
+                trails.add(new TrailPoint(
+                    new Vector3D(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z),
+                    p.color,
+                    1.0f
+                ));
+            }
+        }
+        
+        // Update and remove old trails
+        trails.removeIf(trail -> {
+            trail.age += 0.02f;
+            trail.alpha = Math.max(0, 1.0f - trail.age);
+            return trail.age >= 1.0f;
+        });
+        
+        // Limit trail count for performance
+        while (trails.size() > MAX_TRAIL_POINTS) {
+            trails.remove(0);
+        }
+    }
+    
+    private boolean isInFrustum(Vector3D position) {
+        // Simple frustum culling - check if object is roughly in view
+        Vector3D toObject = position.subtract(camera.position);
+        Vector3D cameraForward = camera.target.subtract(camera.position).normalize();
+        
+        double dot = toObject.normalize().dot(cameraForward);
+        double distance = toObject.magnitude();
+        
+        // Cull if behind camera or too far
+        return dot > -0.5 && distance < 150;
+    }
+    
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
@@ -458,18 +579,34 @@ public class ShowcaseDemo extends JPanel implements Runnable {
         // Render scene
         renderer.clear(new Color(5, 5, 15));
         
-        // Render bodies
+        // Reset culling counter
+        culledObjects = 0;
+        
+        // Render bodies with frustum culling
         for (CelestialBody body : bodies) {
-            renderer.render(body.mesh);
+            if (isInFrustum(body.mesh.position)) {
+                renderer.render(body.mesh);
+            } else {
+                culledObjects++;
+            }
         }
         
-        // Render particles
+        // Render particles with frustum culling
         for (Particle p : particles) {
-            renderer.render(p.mesh);
+            if (isInFrustum(p.mesh.position)) {
+                renderer.render(p.mesh);
+            } else {
+                culledObjects++;
+            }
         }
         
         // Draw buffer
         g2d.drawImage(renderer.getBuffer(), 0, 0, null);
+        
+        // Draw particle trails
+        if (trailEffect && !trails.isEmpty()) {
+            drawTrails(g2d);
+        }
         
         // Apply glow effect
         if (glowEffect) {
@@ -481,6 +618,54 @@ public class ShowcaseDemo extends JPanel implements Runnable {
         
         // Draw stunning UI
         drawUI(g2d);
+    }
+    
+    private void drawTrails(Graphics2D g2d) {
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        
+        for (int i = 1; i < trails.size(); i++) {
+            TrailPoint prev = trails.get(i - 1);
+            TrailPoint curr = trails.get(i);
+            
+            // Project 3D positions to 2D screen space
+            Vector3D screenPrev = projectToScreen(prev.position);
+            Vector3D screenCurr = projectToScreen(curr.position);
+            
+            if (screenPrev != null && screenCurr != null) {
+                float avgAlpha = (prev.alpha + curr.alpha) / 2.0f;
+                Color trailColor = new Color(
+                    curr.color.getRed() / 255f,
+                    curr.color.getGreen() / 255f,
+                    curr.color.getBlue() / 255f,
+                    avgAlpha * 0.6f
+                );
+                
+                g2d.setColor(trailColor);
+                g2d.setStroke(new BasicStroke(3.0f * avgAlpha));
+                g2d.drawLine(
+                    (int)screenPrev.x, (int)screenPrev.y,
+                    (int)screenCurr.x, (int)screenCurr.y
+                );
+            }
+        }
+    }
+    
+    private Vector3D projectToScreen(Vector3D worldPos) {
+        // Simple projection (mimics what renderer does)
+        Vector3D relative = worldPos.subtract(camera.position);
+        Vector3D forward = camera.target.subtract(camera.position).normalize();
+        
+        double distance = relative.dot(forward);
+        if (distance < 1) return null;
+        
+        // Perspective projection
+        double fov = Math.PI / 3;
+        double scale = (getHeight() / 2.0) / Math.tan(fov / 2);
+        
+        double x = getWidth() / 2.0 + (relative.x / distance) * scale;
+        double y = getHeight() / 2.0 - (relative.y / distance) * scale;
+        
+        return new Vector3D(x, y, distance);
     }
     
     private void drawUI(Graphics2D g2d) {
@@ -547,12 +732,12 @@ public class ShowcaseDemo extends JPanel implements Runnable {
         
         // Semi-transparent background with gradient effect
         g2d.setColor(new Color(0, 0, 0, 200));
-        g2d.fillRoundRect(statsX - 15, statsY - 10, 290, 350, 20, 20);
+        g2d.fillRoundRect(statsX - 15, statsY - 10, 290, 450, 20, 20);
         
         // Stylish border
         g2d.setColor(new Color(100, 150, 255, 150));
         g2d.setStroke(new BasicStroke(2));
-        g2d.drawRoundRect(statsX - 15, statsY - 10, 290, 350, 20, 20);
+        g2d.drawRoundRect(statsX - 15, statsY - 10, 290, 450, 20, 20);
         
         // Stats
         Font statsFont = new Font("Monospaced", Font.BOLD, 15);
@@ -580,13 +765,31 @@ public class ShowcaseDemo extends JPanel implements Runnable {
         g2d.drawString(String.format("Objects: %d", bodies.size() + particles.size()), statsX, y);
         y += lineHeight;
         
+        g2d.setColor(new Color(100, 255, 150));
+        g2d.drawString(String.format("Culled: %d", culledObjects), statsX, y);
+        y += lineHeight;
+        
+        g2d.setColor(new Color(220, 220, 220));
         g2d.drawString(String.format("Triangles: %d", 
             (bodies.size() + particles.size()) * 12), statsX, y);
         y += lineHeight;
         
+        if (trailEffect) {
+            g2d.setColor(new Color(255, 150, 255));
+            g2d.drawString(String.format("Trails: %d", trails.size()), statsX, y);
+            y += lineHeight;
+        }
+        
         g2d.setColor(new Color(180, 180, 180));
         g2d.drawString(String.format("Resolution: %dx%d", getWidth(), getHeight()), statsX, y);
         y += lineHeight + 10;
+        
+        // Paused indicator
+        if (isPaused) {
+            g2d.setColor(new Color(255, 200, 100));
+            g2d.drawString("=== PAUSED ===", statsX, y);
+            y += lineHeight + 5;
+        }
         
         // Scene mode
         g2d.setColor(new Color(255, 200, 100));
@@ -612,10 +815,14 @@ public class ShowcaseDemo extends JPanel implements Runnable {
         
         String[][] controls = {
             {"1-5", "Switch scenes"},
-            {"Arrows", "Camera control"},
+            {"Mouse", "Drag to rotate"},
+            {"Wheel", "Zoom in/out"},
+            {"Click", "Pause/Resume"},
+            {"Arrows", "Camera adjust"},
             {"F", "Wireframe"},
             {"G", "Glow effect"},
-            {"Space", "Reset"},
+            {"T", "Trails"},
+            {"R", "Reset time"},
             {"ESC", "Exit"}
         };
         
@@ -654,9 +861,9 @@ public class ShowcaseDemo extends JPanel implements Runnable {
         FeatureBadge[] features = {
             new FeatureBadge("[OK]", "Real-time 3D", new Color(100, 200, 255)),
             new FeatureBadge("[OK]", "Dynamic Lighting", new Color(255, 200, 100)),
-            new FeatureBadge("[OK]", "No OpenGL", new Color(100, 255, 150)),
+            new FeatureBadge("[OK]", "Frustum Culling", new Color(150, 255, 100)),
             new FeatureBadge("[OK]", "Pure Java", new Color(255, 150, 100)),
-            new FeatureBadge("[OK]", "60 FPS", new Color(150, 255, 100)),
+            new FeatureBadge("[OK]", "60 FPS", new Color(100, 255, 200)),
             new FeatureBadge("[OK]", "Interactive", new Color(255, 100, 200))
         };
         
@@ -757,6 +964,20 @@ public class ShowcaseDemo extends JPanel implements Runnable {
             );
             mesh.rotation.y = time * 2;
             mesh.rotation.x = time * 1.5;
+        }
+    }
+    
+    private static class TrailPoint {
+        Vector3D position;
+        Color color;
+        float alpha;
+        float age;
+        
+        TrailPoint(Vector3D pos, Color color, float alpha) {
+            this.position = pos;
+            this.color = color;
+            this.alpha = alpha;
+            this.age = 0;
         }
     }
     
